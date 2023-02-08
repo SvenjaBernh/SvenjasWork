@@ -1,0 +1,236 @@
+---
+title: "Automated FISH Analysis"
+author: "Svenja Bernhardt"
+date: "4 5 2021"
+output: pdf_document
+---
+
+```{r}
+
+
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(magrittr)
+library(xlsx)
+library(tibble)
+
+```
+```
+
+```
+```{r}
+### Defining empty Data Frames and Vectors
+
+# Dots Data Frame
+data_images <- data.frame (X = numeric(0), Area = numeric(0), Mean = numeric(0), Min = numeric(0), Max = numeric(0))
+
+# DAPI Data Frame
+data_DAPI <- data.frame (X = numeric(0), Area = numeric(0), Mean = numeric(0), Min = numeric(0), Max = numeric(0), MinThr = numeric(0), MaxThr = numeric(0))
+
+# empty vectors for file names
+file_name_vector <- vector(mode = "character", length=0)
+
+DAPI_names <- vector(mode = "character", length = 0)
+
+
+```
+
+
+```{r}
+### Data frame for dots
+
+# list all files with "ResultsC(...).csv" into file_names
+file_names <- list.files(pattern = "*ResultsC.\\.csv", recursive = TRUE)
+
+# read csv files into data frame
+# create vector of file_names
+for(element in file_names){
+  new_data_frame <- read.csv(element)
+  data_images <- rbind(data_images, new_data_frame)
+  file_name_vector <- c(file_name_vector, rep(element, nrow(new_data_frame)))
+}
+
+# add column "name" with file_names from file_name vector
+data_images$name <- file_name_vector
+
+
+
+```
+
+```{r}
+### adding column for Channel "C2"
+
+data_images$Channel <- str_extract(data_images$name,"Results.*csv")
+
+data_images$Channel <- gsub("Results", "", data_images$Channel)
+
+data_images$Channel <- gsub("\\.csv", "", data_images$Channel)
+
+colnames(data_images) <- c("Dots","Area","Mean","Min","Max","name","Channel")
+
+
+```
+
+```{r}
+### creating name without "ResultsC2.csv" as image identifier in data_images
+
+# add column with shorted image name, "ResultsC2" replaced with "\\."
+data_images$name <- str_replace(data_images$name, "ResultsC.\\.csv", "")
+
+
+
+
+```
+
+```{r}
+### Data frame for DAPI
+
+# list all file names with "ResultsDAPI.csv" into DAPI_file_names
+DAPI_file_names <- list.files(pattern = "*ResultsDAPI\\.csv", recursive = TRUE)
+
+#read csv files with DAPI Results and create vector with file names
+for(part in DAPI_file_names){
+  next_data_frame <- read.csv(part)
+  data_DAPI <- rbind(data_DAPI, next_data_frame)
+  DAPI_names <- c(DAPI_names, part)
+}
+
+
+
+```
+
+```{r}
+### creating name without "ResultsDAPI.csv" as image identifier in data_DAPI
+
+# add column with shorted image name, "ResultsDAPI" replaced with "."
+data_DAPI$name <- str_replace(DAPI_names, "ResultsDAPI\\.csv", "")
+
+# rename columns in DAPI data frame 
+colnames(data_DAPI) <- c("slice", "count", "DAPIarea", "AverageSize", "XArea", "Mean","name")
+
+```
+
+```{r}
+### combining DAPI and dots data frame
+if (nrow(data_DAPI)>= 1) {
+    all_data <-left_join(data_DAPI, data_images, by = "name")
+} else{
+  all_data <- data_images
+}
+
+### print warning to text file, if all_data is empty
+if(nrow(all_data)<1) {
+  message <- "It seems that you do not have the same datasets for every image. Please make sure that you have DAPI data for all of your images or none of them."
+  writeLines(message, "WarningDifferentData.txt")
+}
+```
+
+```{r}
+# new column with folder name
+if(str_detect(all_data$name, "/")){
+  all_data$FolderName <- gsub("/.*", "", all_data$name) 
+}else{ all_data$FolderName <- rep("NA", nrow(all_data))}
+
+#add channel to name
+all_data$name <- str_c(all_data$name, all_data$Channel, sep="")
+
+# filter and summarise data
+
+final_data <- as.data.frame(all_data %>%  group_by(name) %>% 
+              summarise(FolderName = first(FolderName), NumberDots = n_distinct(Dots), SumArea = sum(Area), MeanArea = mean(Area), sdArea = sd(Area), DAPIarea = max(DAPIarea)))
+
+```
+
+
+```{r}
+#clean name and add channel column again
+final_data$Channel <- str_extract(final_data$name,"tifC.")
+
+final_data$Channel <- gsub("tif", "", final_data$Channel)
+
+final_data$name <- str_replace(final_data$name,"\\.tifC.", "")
+
+final_data$name <- str_replace(final_data$name, ".*/", "")
+
+
+#rearrange columns
+final_data <- final_data %>% select(FolderName, name, Channel, NumberDots, SumArea, MeanArea, sdArea, DAPIarea) 
+
+```
+
+
+```{r}
+### save Results
+
+# save final_data as xlsx file
+write.xlsx(as.data.frame(final_data), file= "ResultsFISHAnalysis.xlsx", row.names = FALSE)
+```
+
+
+```{r}
+### data frame for Marcel's shinyapp
+
+# get number of images per folder
+numberImages <- final_data %>% group_by(FolderName) %>%  summarise(n = n())
+lengthColumn <- as.integer(max(numberImages[,2]))
+
+# filter for channels
+channels <- unique(all_data$Channel)
+
+# vector with column names
+columns <- colnames(final_data)
+
+# vector with folder names
+names <- unique(all_data$FolderName)
+
+# for each channel 
+for (k in channels) {
+  # filter for channels
+  ChannelDataFrame <- final_data [final_data$Channel == k,]
+  # list with all columns in ChannelDataFrame
+  listFinalData <- list(ChannelDataFrame$NumberDots, ChannelDataFrame$SumArea, ChannelDataFrame$sdArea, ChannelDataFrame$MeanArea, ChannelDataFrame$DAPIArea)
+  # vector with column names
+  vecColumns <- c("NumberDots", "SumArea", "MeanArea", "sdArea", "DAPIArea")
+  counter <- 1
+  
+  # for each column
+  for (l in listFinalData) {
+    # empty data frame for Marcel's shinyapp
+    data_shinyapp<- data.frame(vectorData =integer(lengthColumn))
+    
+    #for each folder
+    for (m in names) {
+      # vector with all data for m folder name
+      vectorData <- as.vector(l [ChannelDataFrame$FolderName == m])
+      # expand vector with NA to max number of images in a folder
+      if (length(vectorData) < lengthColumn){
+        vectorData <- c(vectorData, rep(NA, lengthColumn-length(vectorData)))
+      }
+      
+      # add all columns to data frame
+      data_shinyapp <- cbind(data_shinyapp, vectorData)
+    }
+    
+    # filter data frame without first empty column
+    data_shinyapp <- data_shinyapp[,-1]
+    # column names = folder names
+    colnames(data_shinyapp) <- names 
+    # save data frame as xlsx
+    write.xlsx(data_shinyapp, file= paste("Result_" , k , "_", vecColumns[counter] , ".xlsx" , sep=""))
+    # increase counter to match vecColnames with each column fromlistFinalData
+    counter <- counter + 1
+  }  
+  
+}  
+
+
+
+#####
+
+
+
+```
+
+
+
